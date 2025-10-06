@@ -24,32 +24,8 @@ typedef struct
 #define MAX_PAYLOAD_SIZE 1000
 
 // MISC
-
-
-#define _POSIX_SOURCE 1 // POSIX compliant source
-
 #define FALSE 0
 #define TRUE 1
-
-#define BAUDRATE 38400
-#define BUF_SIZE 256
-
-int fd = -1;           // File descriptor for open serial port
-struct termios oldtio; // Serial port settings to restore on closing
-volatile int STOP = FALSE;
-
-//int openSerialPort(const char *serialPort, int baudRate);
-//int closeSerialPort();
-//int readByteSerialPort(unsigned char *byte);
-//int writeBytesSerialPort(const unsigned char *bytes, int nBytes);
-//int currentState = 0;
-unsigned char flag = 0x7E;
-unsigned char A = 0x01;
-unsigned char C = 0x07;
-unsigned char BCC1 = 0x06;
-unsigned char add = 0x03;
-unsigned char c = 0x03;
-unsigned char bcc = 0x00;
 
 // Open a connection using the "port" parameters defined in struct linkLayer.
 // Return 0 on success or -1 on error.
