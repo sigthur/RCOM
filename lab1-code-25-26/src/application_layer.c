@@ -15,5 +15,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     connectionParameters.baudRate = baudRate;
     connectionParameters.nRetransmissions = nTries;
     connectionParameters.timeout = timeout;
-    //llopen(connectionParameters);
+    printf("Opening link layer as %s on %s\n", 
+           connectionParameters.role == LlTx ? "Transmitter" : "Receiver",
+           connectionParameters.serialPort);
+    llopen(connectionParameters);
 }

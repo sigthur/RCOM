@@ -3,6 +3,7 @@
 #include "link_layer.h"
 #include "serial_port.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 #define BAUDRATE 38400
 #define BUF_SIZE 5
@@ -20,10 +21,17 @@ volatile int STOP = FALSE;
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
-int llopen(LinkLayer connectionParameters)
-{
+int llopen(LinkLayer connectionParameters) {
+    int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+        if (fd < 0) {
+            perror("Serial port not opened");
+            exit(1);
+    }
+
+    int nBytesBuf = 0;
+    int currentState = 0;
     if (connectionParameters.role == LlTx) {
-         unsigned char buf[BUF_SIZE] = {0};
+        unsigned char buf[BUF_SIZE] = {0};
         buf[0] = flag;
         buf[1] = add;
         buf[2] = c;
@@ -33,8 +41,7 @@ int llopen(LinkLayer connectionParameters)
         printf("%d bytes written to serial port\n", bytes);
     }
     // TODO: Implement this function
-    int nBytesBuf = 0;
-    int currentState = 0;
+    
     if (connectionParameters.role == LlRx) {
         while (STOP == FALSE)
         {   
