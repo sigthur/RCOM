@@ -5,9 +5,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 
+#define _POSIX_C_SOURCE 200809L
 #define BAUDRATE 38400
 #define BUF_SIZE 5
+
+
 unsigned char flag = 0x7E;
 unsigned char A = 0x01;
 unsigned char C = 0x07;
@@ -22,12 +26,42 @@ volatile int STOP = FALSE;
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
+
+
+int alarmEnabled = FALSE;
+int alarmCount = 0;
+
+void alarmHandler(int signal)
+{
+// Can be used to change a flag that increases the number of alarms
+alarmEnabled = FALSE;
+alarmCount++;
+printf("Alarm #%d received\n", alarmCount);
+
+}
+
+
 int llopen(LinkLayer connectionParameters) {
     int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+
+
+
         if (fd < 0) {
             perror("Serial port not opened");
             exit(1);
     }
+
+
+
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+    perror("sigaction");
+    exit(1);
+    }
+
+
 
     int nBytesBuf = 0;
     int currentState = 0;
@@ -41,23 +75,39 @@ int llopen(LinkLayer connectionParameters) {
         int bytes = writeBytesSerialPort(buf, BUF_SIZE);
         printf("%d bytes written to serial port\n", bytes);
         sleep(1);
+        
+   
 
         int i = 0;
+        int j = 0;
         while (STOP == FALSE) {
             unsigned char byte;
             int read_bytes = readByteSerialPort(&byte);
             nBytesBuf += read_bytes;
+            
+            int t = 3;
+            if (alarm(t)) {
+                writeBytesSerialPort(buf, BUF_SIZE);
+                i++;
+            }
 
+            if (i == 2 ){
+            STOP = TRUE;
+            printf("limite 3x");
+            }
 
             printf("var = 0x%02X\n", byte);
-            i++;
-            if(i == 5) {
+            j++;
+            if(j == 5) {
                 STOP = TRUE;
+                alarm(0);
             }
 
         }
         
     }
+
+    
     // TODO: Implement this function
     
     if (connectionParameters.role == LlRx) {
@@ -105,8 +155,10 @@ int llopen(LinkLayer connectionParameters) {
                 currentState = 0;
                 break;
             case 4: 
-            if (byte == flag)
+            if (byte == flag){
                 STOP = TRUE;
+                alarm(0);
+            }
 
             else
             currentState = 0;
