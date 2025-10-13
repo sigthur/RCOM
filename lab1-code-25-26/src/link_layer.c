@@ -4,6 +4,7 @@
 #include "serial_port.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define BAUDRATE 38400
 #define BUF_SIZE 5
@@ -39,6 +40,23 @@ int llopen(LinkLayer connectionParameters) {
         buf[4] = flag;
         int bytes = writeBytesSerialPort(buf, BUF_SIZE);
         printf("%d bytes written to serial port\n", bytes);
+        sleep(1);
+
+        int i = 0;
+        while (STOP == FALSE) {
+            unsigned char byte;
+            int read_bytes = readByteSerialPort(&byte);
+            nBytesBuf += read_bytes;
+
+
+            printf("var = 0x%02X\n", byte);
+            i++;
+            if(i == 5) {
+                STOP = TRUE;
+            }
+
+        }
+        
     }
     // TODO: Implement this function
     
