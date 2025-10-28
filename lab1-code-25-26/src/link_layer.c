@@ -20,7 +20,9 @@
 #define RR1 0x85
 #define REJ0 0x01
 #define REJ1 0x81
+#define DISC 0x0B 
 
+//int fd=-1;
 unsigned char flag = 0x7E;
 unsigned char A = 0x01;
 unsigned char C = 0x07;
@@ -29,7 +31,7 @@ unsigned char add = 0x03;
 unsigned char c = 0x03;
 unsigned char bcc = 0x00;
 volatile int STOP = FALSE;
-static unsigned char sequenceNumber = 0;
+static unsigned char flagFrame = 0;
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -81,7 +83,7 @@ int llopen(LinkLayer connectionParameters) {
         buf[0] = flag;
         buf[1] = add;
         buf[2] = c;
-        buf[3] = bcc;
+        buf[3] = add ^ c;
         buf[4] = flag;
         int bytes = writeBytesSerialPort(buf, BUF_SIZE);
         printf("%d bytes written to serial port\n", bytes);
@@ -179,11 +181,11 @@ int llopen(LinkLayer connectionParameters) {
         }
         }
         printf("Total bytes received: %d\n", nBytesBuf);
-        unsigned char buf[BUF_SIZE] = {0};
+        unsigned char buf[BUF_SIZE] = {0};  
         buf[0] = flag;
         buf[1] = A;
         buf[2] = C;
-        buf[3] = BCC1;
+        buf[3] = A ^ C;
         buf[4] = flag;
         int bytes = writeBytesSerialPort(buf, 5);
         printf("%d bytes written to serial port\n", bytes);
@@ -225,30 +227,84 @@ int llwrite(const unsigned char *buf, int bufSize)
     for (int i = 1; i < bufSize; i++) {
           bcc2 ^= buf[i];
     }
-
     int stuffedSize = Byte_stuff(buf, bufSize, stuffed);
     unsigned char bcc2Stuffed[2];
     int bcc2Size = Byte_stuff(&bcc2, 1, bcc2Stuffed);
-    int idx = 0;
-    frame[idx++] = flag;                     // Start FLAG
-    frame[idx++] = 0x01;                     // Address
-    frame[idx++] = 0x00 | (sequenceNumber << 6); // Control (Ns)
-    frame[idx] = 0x01 ^ frame[idx-1];      // BCC1 = A ^ C
-    idx++;
-    for (int i = 0; i < stuffedSize; i++)    // Data
+    frame[0] = flag;                     // Start FLAG
+    frame[1] = 0x01;                     // Address
+    if (flagFrame==0) {
+        frame[2]=IN0;
+    }
+    else if (flagFrame==1) {
+        frame[2]=IN1;
+    }
+    frame[3] = frame[1] ^ frame[2];      // BCC1 = A ^ C
+    int idx = 4;
+    for (int i = 0; i < stuffedSize; i++) {
         frame[idx++] = stuffed[i];
-    for (int i = 0; i < bcc2Size; i++)       // BCC2
+    }   // Data
+    for (int i = 0; i < bcc2Size; i++)  {
         frame[idx++] = bcc2Stuffed[i];
+    }     // BCC2
     frame[idx++] = flag;                     // End FLAG
 
-    int written = writeBytesSerialPort(frame, idx);
-    if (written != idx) {
-        printf("[llwrite] Error writing frame\n");
-        return -1;
+    int attempts = 0;
+    const int maxAttempts = 3;
+    while (attempts < maxAttempts) {
+        int written = writeBytesSerialPort(frame, idx);
+        if (written != idx) {
+            printf("Error writing frame\n");
+            return -1;
+        }
+
+        // Wait for RR or REJ
+        unsigned char byte;
+        enum State state = START_STATE;
+        unsigned char control = 0;
+        int validAck = 0;
+
+        while (!validAck) {
+            if (readByteSerialPort(&byte) <= 0) continue;
+
+            switch (state) {
+                case START_STATE:
+                    if (byte == flag) state = FLAG_STATE;
+                    break;
+                case FLAG_STATE:
+                    if (byte == 0x03) state = A_STATE;
+                    else if (byte != flag) state = START_STATE;
+                    break;
+                case A_STATE:
+                    if (byte == RR0 || byte == RR1 || byte == REJ0 || byte == REJ1) {
+                        control = byte;
+                        state = C_STATE;
+                    } else if (byte == flag) state = FLAG_STATE;
+                    else state = START_STATE;
+                    break;
+                case C_STATE:
+                    if (byte == (0x03 ^ control)) state = BCC_STATE;
+                    else state = START_STATE;
+                    break;
+                case BCC_STATE:
+                    if (byte == flag) validAck = 1;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (control == RR0 || control == RR1) {
+            printf("RR received\n");
+            flagFrame ^= 1;
+            return bufSize;
+        } else if (control == REJ0 || control == REJ1) {
+            printf("REJ received\n");
+            attempts++;
+        }
     }
 
-    sequenceNumber = (sequenceNumber + 1) % 2;
-    return bufSize;
+    printf("Max retransmissions reached\n");
+    return -1;
 }
 
 
@@ -280,9 +336,8 @@ int llread(unsigned char *packet)
     unsigned char frame[MAX_PAYLOAD_SIZE * 2 + 6];
     int state = 0;
     int idx = 0;
-    
-    // Simple state machine to read a full I-frame
     int frameComplete = 0;
+    
     while (!frameComplete) {
         int res = readByteSerialPort(&byte);
         if (res <= 0) continue;
@@ -315,22 +370,119 @@ int llread(unsigned char *packet)
     for (int i = 0; i < destuffedSize - 1; i++)
         calcBCC2 ^= destuffed[i];
 
-    if (bcc2 != calcBCC2) {
-        printf("[llread] BCC2 error! (expected %02X, got %02X)\n", calcBCC2, bcc2);
+    unsigned char ctrl = frame[2]; 
+    unsigned char rr[5];          
+    unsigned char rej[5];          
+
+    if (bcc2 == calcBCC2) {
+        rr[0] = flag;
+        rr[1] = 0x03;  
+        rr[2] = (ctrl == IN0) ? RR1 : RR0;  
+        rr[3] = 0x03 ^ rr[2];              
+        rr[4] = flag;
+        writeBytesSerialPort(rr, 5);
+
+        memcpy(packet, destuffed, destuffedSize - 1);
+        printf("Received %d bytes (BCC OK), sent RR\n", destuffedSize - 1);
+        return destuffedSize - 1;
+    } 
+    else {
+        rej[0] = flag;
+        rej[1] = 0x03;
+        rej[2] = (ctrl == IN0) ? REJ0 : REJ1; 
+        rej[3] = 0x03 ^ rej[2];               
+        rej[4] = flag;
+        writeBytesSerialPort(rej, 5);
+
+        printf("BCC2 error! Sent REJ\n");
         return -1;
     }
-
-    memcpy(packet, destuffed, destuffedSize - 1);
-    printf("[llread] Received %d bytes (BCC OK)\n", destuffedSize - 1);
-    return destuffedSize - 1;
 }
 
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose()
-{
-    // TODO: Implement this function
+int llclose(LinkLayerRole role) {
+    unsigned char byte;
+    enum State state;
+
+    unsigned char buf_disc[5] = {flag, 0x01, DISC, 0x01 ^ DISC, flag};
+    unsigned char buf_ua[5]   = {flag, 0x01, 0x07, 0x01 ^ 0x07, flag};
+
+    if (role == LlTx) {
+        // Send DISC
+        writeBytesSerialPort(buf_disc, 5);
+
+        // Wait for DISC from receiver
+        state = START_STATE;
+        while (state != END_STATE) {
+            if (readByteSerialPort(&byte) <= 0) continue;
+
+            switch (state) {
+                case START_STATE: 
+                    if (byte == flag) state = FLAG_STATE; 
+                    break;
+                case FLAG_STATE:  
+                    if (byte == 0x01) state = A_STATE; 
+                    else if (byte != flag) state = START_STATE; 
+                    break;
+                case A_STATE:     
+                    if (byte == DISC) state = C_STATE; 
+                    else if (byte == flag) state = FLAG_STATE; 
+                    else state = START_STATE; 
+                    break;
+                case C_STATE:     
+                    if (byte == (0x01 ^ DISC)) state = BCC_STATE; 
+                    else if (byte == flag) state = FLAG_STATE; 
+                    else state = START_STATE; 
+                    break;
+                case BCC_STATE:   
+                    if (byte == flag) state = END_STATE; 
+                    else state = START_STATE; 
+                    break;
+                default: break;
+            }
+        }
+
+        writeBytesSerialPort(buf_ua, 5);
+    } 
+    else if (role == LlRx) {
+        // Wait for DISC
+        state = START_STATE;
+        while (state != END_STATE) {
+            if (readByteSerialPort(&byte) <= 0) continue;
+
+            switch (state) {
+                case START_STATE: 
+                    if (byte == flag) state = FLAG_STATE; 
+                    break;
+                case FLAG_STATE:  
+                    if (byte == 0x01) state = A_STATE; 
+                    else if (byte != flag) state = START_STATE; 
+                    break;
+                case A_STATE:     
+                    if (byte == DISC) state = C_STATE; 
+                    else if (byte == flag) state = FLAG_STATE; 
+                    else state = START_STATE; 
+                    break;
+                case C_STATE:     
+                    if (byte == (0x01 ^ DISC)) state = BCC_STATE; 
+                    else if (byte == flag) state = FLAG_STATE; 
+                    else state = START_STATE; 
+                    break;
+                case BCC_STATE:   
+                    if (byte == flag) state = END_STATE; 
+                    else state = START_STATE; 
+                    break;
+                default: 
+                    break;
+            }
+        }
+
+        writeBytesSerialPort(buf_disc, 5);
+    }
+
+    // Close serial port
     int fd = closeSerialPort();
     if (fd < 0) {
         perror("Error closing serial port");
@@ -338,7 +490,5 @@ int llclose()
     }
 
     printf("Closed.\n");
-    return 0;
-
     return 0;
 }

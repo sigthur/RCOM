@@ -88,7 +88,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         printf("Sending END control packet...\n");
         llwrite(endPacket, sizeof(endPacket));
 
-        llclose(10);
+        llclose(connectionParameters.role);
         printf("File '%s' sent successfully!\n", filename);
     }
 
@@ -115,7 +115,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             unsigned char type = packet[0];
 
             if (type == START_CONTROL) {
-                // Extract file size
                 fileSize = packet[3] * 256 + packet[4];
                 printf("Start packet received. File size: %d bytes\n", fileSize);
                 started = 1;
@@ -135,7 +134,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         }
 
         fclose(output);
-        llclose(10);
+        llclose(connectionParameters.role);
         printf("File received\n");
     }
 }
