@@ -22,7 +22,7 @@
 #define REJ1 0x81
 #define DISC 0x0B 
 
-//int fd=-1;
+
 unsigned char flag = 0x7E;
 unsigned char A = 0x01;
 unsigned char C = 0x07;
@@ -55,26 +55,17 @@ printf("Alarm #%d received\n", alarmCount);
 
 
 int llopen(LinkLayer connectionParameters) {
+    
+    
     int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
-
-
-
-        if (fd < 0) {
-            perror("Serial port not opened");
-            exit(1);
+    if (fd < 0) {
+        perror("Serial port not opened");
+        exit(1);
     }
-
-
 
     struct sigaction act = {0};
-    act.sa_handler = &alarmHandler;
-    if (sigaction(SIGALRM, &act, NULL) == -1)
-    {
-    perror("sigaction");
-    exit(1);
-    }
-
-
+    act.sa_handler = alarmHandler;
+    sigaction(SIGALRM, &act, NULL);
 
     int nBytesBuf = 0;
     int currentState = 0;
@@ -85,40 +76,66 @@ int llopen(LinkLayer connectionParameters) {
         buf[2] = c;
         buf[3] = add ^ c;
         buf[4] = flag;
-        int bytes = writeBytesSerialPort(buf, BUF_SIZE);
-        printf("%d bytes written to serial port\n", bytes);
+        unsigned char byte;
         sleep(1);
         
    
+        int cont = 0;
+        while(cont != connectionParameters.nRetransmissions) {
+            int bytes = writeBytesSerialPort(buf, BUF_SIZE);
+            printf("%d bytes written to serial port\n", bytes);
+            alarmEnabled = TRUE;
+            alarm(connectionParameters.timeout);
+            enum State state = START_STATE;
+            while(alarmEnabled) {
+                if (readByteSerialPort(&byte) > 0) {
+                    switch(state) {
+                        case START_STATE:
+                            if (byte == flag) state = FLAG_STATE;
+                            break;
 
-        //int i = 0;
-        int j = 0;
-        while (STOP == FALSE) {
-            unsigned char byte;
-            int read_bytes = readByteSerialPort(&byte);
-            nBytesBuf += read_bytes;
-            
-            /*int t = 3;
-            if (alarm(t)) {
-                writeBytesSerialPort(buf, BUF_SIZE);
-                i++;
+                        case FLAG_STATE:
+                            if (byte == A) state = A_STATE;
+                            else if (byte != flag) state = START_STATE;
+                            break;
+
+                        case A_STATE:
+                            if (byte == C) state = C_STATE; 
+                            else if (byte == flag) state = FLAG_STATE;
+                            else state = START_STATE;
+                            break;
+
+                        case C_STATE:
+                            if (byte == (A ^ C)) state = BCC_STATE;
+                            else if (byte == flag) state = FLAG_STATE;
+                            else state = START_STATE;
+                            break;
+
+                        case BCC_STATE:
+                            if (byte == flag) {
+                                printf(" UA received\n");
+                                alarm(0); // stop alarm
+                                alarmEnabled = FALSE;
+                                return fd;
+                            }
+                            else state = START_STATE;
+                            break;
+
+                        default:
+                            state = START_STATE;
+                            break;
+                    }
+                }
             }
-
-            if (i == 2 ){
-            STOP = TRUE;
-            printf("limite 3x");
-            }*/
-
-            printf("var = 0x%02X\n", byte);
-            j++;
-            if(j == 5) {
-                STOP = TRUE;
-                //alarm(0);
-            }
-
+            cont++;
+            printf("Failed Receving UA");
         }
-        
+        printf("Failed to set a connection");
+        alarm(0);
+        return -1;
     }
+            
+    
 
     
     // TODO: Implement this function
