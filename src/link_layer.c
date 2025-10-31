@@ -23,13 +23,13 @@
 #define DISC 0x0B 
 
 
-unsigned char flag = 0x7E;
-unsigned char A = 0x01;
-unsigned char C = 0x07;
-unsigned char BCC1 = 0x06;
-unsigned char add = 0x03;
-unsigned char c = 0x03;
-unsigned char bcc = 0x00;
+#define flag 0x7E
+#define A 0x01
+#define C 0x07
+#define BCC1 (A ^ C)
+#define add 0x03
+#define c 0x03
+#define bcc (add ^ c)
 volatile int STOP = FALSE;
 static unsigned char flagFrame = 0;
 
@@ -39,7 +39,6 @@ static unsigned char flagFrame = 0;
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
-
 
 int alarmEnabled = FALSE;
 int alarmCount = 0;
@@ -56,6 +55,9 @@ printf("Alarm #%d received\n", alarmCount);
 
 int llopen(LinkLayer connectionParameters) {
     
+    struct sigaction act = {0};
+    act.sa_handler = alarmHandler;
+    sigaction(SIGALRM, &act, NULL);
     
     int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
     if (fd < 0) {
@@ -63,9 +65,7 @@ int llopen(LinkLayer connectionParameters) {
         exit(1);
     }
 
-    struct sigaction act = {0};
-    act.sa_handler = alarmHandler;
-    sigaction(SIGALRM, &act, NULL);
+    
 
     int nBytesBuf = 0;
     int currentState = 0;
@@ -79,26 +79,26 @@ int llopen(LinkLayer connectionParameters) {
         unsigned char byte;
         sleep(1);
         
-   
-        int cont = 0;
-        while(cont != connectionParameters.nRetransmissions) {
-            int bytes = writeBytesSerialPort(buf, BUF_SIZE);
-            printf("%d bytes written to serial port\n", bytes);
-            alarmEnabled = TRUE;
-            alarm(connectionParameters.timeout);
-            enum State state = START_STATE;
-            while(alarmEnabled) {
-                if (readByteSerialPort(&byte) > 0) {
-                    switch(state) {
+        for (int i = 0; i< connectionParameters.nRetransmissions; i++){
+
+        int bytes = writeBytesSerialPort(buf, BUF_SIZE);
+        printf("%d bytes written to serial port\n", bytes);
+
+        alarmEnabled = TRUE;
+        alarm(connectionParameters.timeout);
+        enum State state = START_STATE;
+        while (alarmEnabled) {
+            int res = readByteSerialPort(&byte);
+            if (res > 0) {
+                switch (state) {
                         case START_STATE:
-                            if (byte == flag) state = FLAG_STATE;
+                            if (byte ==flag) state = FLAG_STATE;
                             break;
 
                         case FLAG_STATE:
                             if (byte == A) state = A_STATE;
                             else if (byte != flag) state = START_STATE;
                             break;
-
                         case A_STATE:
                             if (byte == C) state = C_STATE; 
                             else if (byte == flag) state = FLAG_STATE;
@@ -113,8 +113,8 @@ int llopen(LinkLayer connectionParameters) {
 
                         case BCC_STATE:
                             if (byte == flag) {
-                                printf(" UA received\n");
-                                alarm(0); // stop alarm
+                                printf("UA received\n");
+                                alarm(0);
                                 alarmEnabled = FALSE;
                                 return fd;
                             }
@@ -127,13 +127,13 @@ int llopen(LinkLayer connectionParameters) {
                     }
                 }
             }
-            cont++;
             printf("Failed Receving UA");
         }
         printf("Failed to set a connection");
         alarm(0);
         return -1;
     }
+
             
     
 
@@ -249,13 +249,8 @@ int llwrite(const unsigned char *buf, int bufSize)
     int bcc2Size = Byte_stuff(&bcc2, 1, bcc2Stuffed);
     frame[0] = flag;                     // Start FLAG
     frame[1] = 0x01;                     // Address
-    if (flagFrame==0) {
-        frame[2]=IN0;
-    }
-    else if (flagFrame==1) {
-        frame[2]=IN1;
-    }
-    frame[3] = frame[1] ^ frame[2];      // BCC1 = A ^ C
+    frame[2] = (flagFrame == 0) ? IN0 : IN1; // Control if flag == 0 IN0 else IN1
+    frame[3] = frame[1] ^ frame[2];      // BCC1 = A ^ C xor
     int idx = 4;
     for (int i = 0; i < stuffedSize; i++) {
         frame[idx++] = stuffed[i];
@@ -265,22 +260,28 @@ int llwrite(const unsigned char *buf, int bufSize)
     }     // BCC2
     frame[idx++] = flag;                     // End FLAG
 
-    int attempts = 0;
     const int maxAttempts = 3;
-    while (attempts < maxAttempts) {
+    for (int attempts = 0; attempts < maxAttempts; attempts++){
         int written = writeBytesSerialPort(frame, idx);
+
         if (written != idx) {
             printf("Error writing frame\n");
             return -1;
         }
 
         // Wait for RR or REJ
+        printf("Frame sent (attempts %d)\n", attempts + 1);
+
+        alarmEnabled = TRUE;
+        alarm(3); // 3 seconds timeout
+
         unsigned char byte;
         enum State state = START_STATE;
         unsigned char control = 0;
         int validAck = 0;
 
-        while (!validAck) {
+        while (alarmEnabled && !validAck) {
+
             if (readByteSerialPort(&byte) <= 0) continue;
 
             switch (state) {
@@ -308,6 +309,12 @@ int llwrite(const unsigned char *buf, int bufSize)
                 default:
                     break;
             }
+        }
+
+        alarm(0);
+        if (!alarmEnabled) {
+            printf("Timeout\n");
+            continue;
         }
 
         if (control == RR0 || control == RR1) {
