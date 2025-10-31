@@ -79,7 +79,8 @@ int llopen(LinkLayer connectionParameters) {
         unsigned char byte;
         sleep(1);
         
-        for (int i = 0; i< connectionParameters.nRetransmissions; i++){
+        int count = 0;
+        while(count != connectionParameters.nRetransmissions) {
 
         int bytes = writeBytesSerialPort(buf, BUF_SIZE);
         printf("%d bytes written to serial port\n", bytes);
@@ -127,6 +128,7 @@ int llopen(LinkLayer connectionParameters) {
                     }
                 }
             }
+            count++;
             printf("Failed Receving UA");
         }
         printf("Failed to set a connection");
